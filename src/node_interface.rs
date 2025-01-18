@@ -77,6 +77,14 @@ impl NodeInterface {
         }
     }
 
+    pub fn from_url_str(api_key: &str, url: &str) -> Result<Self> {
+        let url = Url::parse(url).map_err(|e| NodeError::InvalidUrl(e.to_string()))?;
+        Ok(NodeInterface {
+            api_key: api_key.to_string(),
+            url,
+        })
+    }
+
     /// Get all addresses from the node wallet
     pub fn wallet_addresses(&self) -> Result<Vec<P2PKAddressString>> {
         let endpoint = "/wallet/addresses";
@@ -365,6 +373,23 @@ impl NodeInterface {
             Ok(wallet_status)
         } else {
             Err(NodeError::FailedParsingWalletStatus(res_json.pretty(2)))
+        }
+    }
+
+    /// Unlock wallet
+    pub fn wallet_unlock(&self, password: &str) -> Result<bool> {
+        let endpoint = "/wallet/unlock";
+        let body = object! {
+            pass: password,
+        };
+
+        let res = self.send_post_req(endpoint, body.to_string())?;
+
+        if res.status().is_success() {
+            Ok(true)
+        } else {
+            let json = self.parse_response_to_json(Ok(res))?;
+            Err(NodeError::BadRequest(json["error"].to_string()))
         }
     }
 }
