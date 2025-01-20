@@ -292,4 +292,33 @@ impl NodeInterface {
         }
         Ok(headers)
     }
+
+    /// Checks if the blockchain indexer is active by querying the node.
+    pub fn indexer_status(&self) -> Result<IndexerStatus> {
+        let endpoint = "/blockchain/indexedHeight";
+        let res = self.send_get_req(endpoint);
+        let res_json = self.parse_response_to_json(res)?;
+
+        let error = res_json["error"].clone();
+        if !error.is_null() {
+            return Ok(IndexerStatus {
+                is_active: false,
+                is_sync: false,
+            });
+        }
+
+        let full_height = res_json["fullHeight"].as_u64().ok_or(NodeError::FailedParsingNodeResponse(res_json.to_string()))?;
+        let indexed_height = res_json["indexedHeight"].as_u64().ok_or(NodeError::FailedParsingNodeResponse(res_json.to_string()))?;
+
+        let is_sync = (full_height as i64 - indexed_height as i64).abs() < 10;
+        Ok(IndexerStatus {
+            is_active: true,
+            is_sync,
+        })
+    }
+}
+
+pub struct IndexerStatus {
+    pub is_active: bool,
+    pub is_sync: bool,
 }
