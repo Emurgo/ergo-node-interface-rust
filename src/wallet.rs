@@ -1,81 +1,12 @@
-//! The `NodeInterface` struct is defined which allows for interacting with an Ergo Node via Rust.
-
-use crate::{BlockHeight, NanoErg, P2PKAddressString, P2SAddressString};
+use crate::node_interface::{is_mainnet_address, is_testnet_address, NodeError, NodeInterface, Result};
+use crate::{BlockHeight, NanoErg, P2PKAddressString};
 use ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox;
-use reqwest::Url;
 use serde_json::from_str;
 use serde_with::serde_as;
 use serde_with::NoneAsEmptyString;
-use thiserror::Error;
 
-pub type Result<T> = std::result::Result<T, NodeError>;
-
-#[derive(Error, Debug)]
-pub enum NodeError {
-    #[error("The configured node is unreachable. Please ensure your config is correctly filled out and the node is running.")]
-    NodeUnreachable,
-    #[error("Failed reading response from node: {0}")]
-    FailedParsingNodeResponse(String),
-    #[error("Failed parsing JSON box from node: {0}")]
-    FailedParsingBox(String),
-    #[error("No Boxes Were Found.")]
-    NoBoxesFound,
-    #[error("An insufficient number of Ergs were found.")]
-    InsufficientErgsBalance(),
-    #[error("Failed registering UTXO-set scan with the node: {0}")]
-    FailedRegisteringScan(String),
-    #[error("The node rejected the request you provided.\nNode Response: {0}")]
-    BadRequest(String),
-    #[error("The node wallet has no addresses.")]
-    NoAddressesInWallet,
-    #[error("The node is still syncing.")]
-    NodeSyncing,
-    #[error("Error while processing Node Interface Config Yaml: {0}")]
-    YamlError(String),
-    #[error("{0}")]
-    Other(String),
-    #[error("Failed parsing wallet status from node: {0}")]
-    FailedParsingWalletStatus(String),
-    #[error("Failed to parse URL: {0}")]
-    InvalidUrl(String),
-    #[error("Failed to parse scan ID: {0}")]
-    InvalidScanId(String),
-}
-
-/// The `NodeInterface` struct which holds the relevant Ergo node data
-/// and has methods implemented to interact with the node.
-#[derive(Debug, Clone)]
-pub struct NodeInterface {
-    pub api_key: String,
-    pub url: Url,
-}
-
-pub fn is_mainnet_address(address: &str) -> bool {
-    address.starts_with('9')
-}
-
-pub fn is_testnet_address(address: &str) -> bool {
-    address.starts_with('3')
-}
 
 impl NodeInterface {
-    /// Create a new `NodeInterface` using details about the Node
-    /// Sets url to `http://ip:port` using `ip` and `port`
-    pub fn new(api_key: &str, ip: &str, port: &str) -> Result<Self> {
-        let url = Url::parse(("http://".to_string() + ip + ":" + port + "/").as_str())
-            .map_err(|e| NodeError::InvalidUrl(e.to_string()))?;
-        Ok(NodeInterface {
-            api_key: api_key.to_string(),
-            url,
-        })
-    }
-
-    pub fn from_url(api_key: &str, url: Url) -> Self {
-        NodeInterface {
-            api_key: api_key.to_string(),
-            url,
-        }
-    }
 
     /// Get all addresses from the node wallet
     pub fn wallet_addresses(&self) -> Result<Vec<P2PKAddressString>> {
@@ -229,97 +160,6 @@ impl NodeInterface {
         Ok(serialized_boxes)
     }
 
-    /// Given a P2S Ergo address, extract the hex-encoded serialized ErgoTree (script)
-    pub fn p2s_to_tree(&self, address: &P2SAddressString) -> Result<String> {
-        let endpoint = "/script/addressToTree/".to_string() + address;
-        let res = self.send_get_req(&endpoint);
-        let res_json = self.parse_response_to_json(res)?;
-
-        Ok(res_json["tree"].to_string())
-    }
-
-    /// Given a P2S Ergo address, convert it to a hex-encoded Sigma byte array constant
-    pub fn p2s_to_bytes(&self, address: &P2SAddressString) -> Result<String> {
-        let endpoint = "/script/addressToBytes/".to_string() + address;
-        let res = self.send_get_req(&endpoint);
-        let res_json = self.parse_response_to_json(res)?;
-
-        Ok(res_json["bytes"].to_string())
-    }
-
-    /// Given an Ergo P2PK Address, convert it to a raw hex-encoded EC point
-    pub fn p2pk_to_raw(&self, address: &P2PKAddressString) -> Result<String> {
-        let endpoint = "/utils/addressToRaw/".to_string() + address;
-        let res = self.send_get_req(&endpoint);
-        let res_json = self.parse_response_to_json(res)?;
-
-        Ok(res_json["raw"].to_string())
-    }
-
-    /// Given an Ergo P2PK Address, convert it to a raw hex-encoded EC point
-    /// and prepend the type bytes so it is encoded and ready
-    /// to be used in a register.
-    pub fn p2pk_to_raw_for_register(&self, address: &P2PKAddressString) -> Result<String> {
-        let add = self.p2pk_to_raw(address)?;
-        Ok("07".to_string() + &add)
-    }
-
-    /// Given a raw hex-encoded EC point, convert it to a P2PK address
-    pub fn raw_to_p2pk(&self, raw: &str) -> Result<P2PKAddressString> {
-        let endpoint = "/utils/rawToAddress/".to_string() + raw;
-        let res = self.send_get_req(&endpoint);
-        let res_json = self.parse_response_to_json(res)?;
-
-        Ok(res_json["address"].to_string())
-    }
-
-    /// Given a raw hex-encoded EC point from a register (thus with type encoded characters in front),
-    /// convert it to a P2PK address
-    pub fn raw_from_register_to_p2pk(&self, typed_raw: &str) -> Result<P2PKAddressString> {
-        self.raw_to_p2pk(&typed_raw[2..])
-    }
-
-    /// Given a `Vec<ErgoBox>` return the given boxes (which must be part of the UTXO-set) as
-    /// a vec of serialized strings in Base16 encoding
-    pub fn serialize_boxes(&self, b: &[ErgoBox]) -> Result<Vec<String>> {
-        Ok(b.iter()
-            .map(|b| {
-                self.serialized_box_from_id(&b.box_id().into())
-                    .unwrap_or_else(|_| "".to_string())
-            })
-            .collect())
-    }
-
-    /// Given an `ErgoBox` return the given box (which must be part of the UTXO-set) as
-    /// a serialized string in Base16 encoding
-    pub fn serialize_box(&self, b: &ErgoBox) -> Result<String> {
-        self.serialized_box_from_id(&b.box_id().into())
-    }
-
-    /// Given a box id return the given box (which must be part of the
-    /// UTXO-set) as a serialized string in Base16 encoding
-    pub fn serialized_box_from_id(&self, box_id: &String) -> Result<String> {
-        let endpoint = "/utxo/byIdBinary/".to_string() + box_id;
-        let res = self.send_get_req(&endpoint);
-        let res_json = self.parse_response_to_json(res)?;
-
-        Ok(res_json["bytes"].to_string())
-    }
-
-    /// Given a box id return the given box (which must be part of the
-    /// UTXO-set) as a serialized string in Base16 encoding
-    pub fn box_from_id(&self, box_id: &String) -> Result<ErgoBox> {
-        let endpoint = "/utxo/byId/".to_string() + box_id;
-        let res = self.send_get_req(&endpoint);
-        let res_json = self.parse_response_to_json(res)?;
-
-        if let Ok(ergo_box) = from_str(&res_json.to_string()) {
-            Ok(ergo_box)
-        } else {
-            Err(NodeError::FailedParsingBox(res_json.pretty(2)))
-        }
-    }
-
     /// Get the current nanoErgs balance held in the Ergo Node wallet
     pub fn wallet_nano_ergs_balance(&self) -> Result<NanoErg> {
         let endpoint = "/wallet/balances";
@@ -334,24 +174,6 @@ impl NodeInterface {
             balance
                 .as_u64()
                 .ok_or_else(|| NodeError::FailedParsingNodeResponse(res_json.to_string()))
-        }
-    }
-
-    /// Get the current block height of the blockchain
-    pub fn current_block_height(&self) -> Result<BlockHeight> {
-        let endpoint = "/info";
-        let res = self.send_get_req(endpoint);
-        let res_json = self.parse_response_to_json(res)?;
-
-        let height_json = res_json["fullHeight"].clone();
-
-        if height_json.is_null() {
-            Err(NodeError::NodeSyncing)
-        } else {
-            height_json
-                .to_string()
-                .parse()
-                .map_err(|_| NodeError::FailedParsingNodeResponse(res_json.to_string()))
         }
     }
 
