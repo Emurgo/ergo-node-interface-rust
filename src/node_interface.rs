@@ -79,6 +79,14 @@ impl NodeInterface {
         }
     }
 
+    pub fn from_url_str(api_key: &str, url: &str) -> Result<Self> {
+        let url = Url::parse(url).map_err(|e| NodeError::InvalidUrl(e.to_string()))?;
+        Ok(NodeInterface {
+            api_key: api_key.to_string(),
+            url,
+        })
+    }
+
     /// Acquires unspent boxes from the blockchain by specific address
     pub fn unspent_boxes_by_address(&self, address: &P2PKAddressString, offset: u64, limit: u64) -> Result<Vec<ErgoBox>> {
         let endpoint = format!(
